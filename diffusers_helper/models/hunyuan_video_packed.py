@@ -15,23 +15,31 @@ from diffusers.models.embeddings import TimestepEmbedding, Timesteps, PixArtAlph
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers_helper.dit_common import LayerNorm
+from diffusers_helper.device import accelerator_type, torch_npu
 from diffusers_helper.utils import zero_module
 
 
 enabled_backends = []
 
-if torch.backends.cuda.flash_sdp_enabled():
-    enabled_backends.append("flash")
-if torch.backends.cuda.math_sdp_enabled():
+if accelerator_type == "cuda":
+    if torch.backends.cuda.flash_sdp_enabled():
+        enabled_backends.append("flash")
+    if torch.backends.cuda.math_sdp_enabled():
+        enabled_backends.append("math")
+    if torch.backends.cuda.mem_efficient_sdp_enabled():
+        enabled_backends.append("mem_efficient")
+    if torch.backends.cuda.cudnn_sdp_enabled():
+        enabled_backends.append("cudnn")
+elif accelerator_type == "npu":
+    enabled_backends.append("npu_fusion_attention")
+else:
     enabled_backends.append("math")
-if torch.backends.cuda.mem_efficient_sdp_enabled():
-    enabled_backends.append("mem_efficient")
-if torch.backends.cuda.cudnn_sdp_enabled():
-    enabled_backends.append("cudnn")
 
 print("Currently enabled native sdp backends:", enabled_backends)
 
 try:
+    if accelerator_type != "cuda":
+        raise ImportError
     # raise NotImplementedError
     from xformers.ops import memory_efficient_attention as xformers_attn_func
     print('Xformers is installed!')
@@ -40,6 +48,8 @@ except:
     xformers_attn_func = None
 
 try:
+    if accelerator_type != "cuda":
+        raise ImportError
     # raise NotImplementedError
     from flash_attn import flash_attn_varlen_func, flash_attn_func
     print('Flash Attn is installed!')
@@ -49,6 +59,8 @@ except:
     flash_attn_func = None
 
 try:
+    if accelerator_type != "cuda":
+        raise ImportError
     # raise NotImplementedError
     from sageattention import sageattn_varlen, sageattn
     print('Sage Attn is installed!')
@@ -59,6 +71,7 @@ except:
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+_npu_fusion_attention_usable = True
 
 
 def pad_for_3d_conv(x, kernel_size):
@@ -81,19 +94,13 @@ def center_down_sample_3d(x, kernel_size):
 
 def get_cu_seqlens(text_mask, img_len):
     batch_size = text_mask.shape[0]
-    text_len = text_mask.sum(dim=1)
+    text_len = text_mask.sum(dim=1, dtype=torch.int32)
     max_len = text_mask.shape[1] + img_len
-
-    cu_seqlens = torch.zeros([2 * batch_size + 1], dtype=torch.int32, device="cuda")
-
-    for i in range(batch_size):
-        s = text_len[i] + img_len
-        s1 = i * max_len + s
-        s2 = (i + 1) * max_len
-        cu_seqlens[2 * i + 1] = s1
-        cu_seqlens[2 * i + 2] = s2
-
-    return cu_seqlens
+    batch_indices = torch.arange(batch_size, dtype=torch.int32, device=text_mask.device)
+    actual_ends = batch_indices * max_len + text_len + img_len
+    padded_ends = (batch_indices + 1) * max_len
+    sequence_ends = torch.stack((actual_ends, padded_ends), dim=1).flatten()
+    return torch.cat((torch.zeros(1, dtype=torch.int32, device=text_mask.device), sequence_ends))
 
 
 def apply_rotary_emb_transposed(x, freqs_cis):
@@ -103,6 +110,36 @@ def apply_rotary_emb_transposed(x, freqs_cis):
     out = x.float() * cos + x_rotated.float() * sin
     out = out.to(x)
     return out
+
+
+def _native_attention(q, k, v):
+    global _npu_fusion_attention_usable
+
+    if (
+        q.device.type == "npu"
+        and _npu_fusion_attention_usable
+        and torch_npu is not None
+        and hasattr(torch_npu, "npu_fusion_attention")
+    ):
+        head_num = q.shape[2]
+        scale = q.shape[-1] ** -0.5
+        try:
+            return torch_npu.npu_fusion_attention(
+                q.contiguous(),
+                k.contiguous(),
+                v.contiguous(),
+                head_num,
+                "BSND",
+                scale=scale,
+                keep_prob=1.0,
+            )[0]
+        except (RuntimeError, TypeError) as exc:
+            _npu_fusion_attention_usable = False
+            logger.warning("NPU fusion attention unavailable for this shape; falling back to SDPA: %s", exc)
+
+    return torch.nn.functional.scaled_dot_product_attention(
+        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+    ).transpose(1, 2)
 
 
 def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
@@ -119,8 +156,27 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
             x = xformers_attn_func(q, k, v)
             return x
 
-        x = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
-        return x
+        return _native_attention(q, k, v)
+
+    if sageattn_varlen is None and flash_attn_varlen_func is None:
+        # Native SDPA has no cu_seqlens interface. Apply attention only to each
+        # sample's valid tokens and leave padded text tokens at zero.
+        batch_size, padded_length = q.shape[:2]
+        outputs = []
+        for index in range(batch_size):
+            sequence_start = index * padded_length
+            sequence_end = int(cu_seqlens_q[2 * index + 1].item())
+            valid_length = sequence_end - sequence_start
+            valid_output = _native_attention(
+                q[index:index + 1, :valid_length],
+                k[index:index + 1, :valid_length],
+                v[index:index + 1, :valid_length],
+            )
+            if valid_length < padded_length:
+                padding = torch.zeros_like(q[index:index + 1, valid_length:])
+                valid_output = torch.cat([valid_output, padding], dim=1)
+            outputs.append(valid_output)
+        return torch.cat(outputs, dim=0)
 
     B, L, H, C = q.shape
 

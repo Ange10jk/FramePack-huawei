@@ -36,17 +36,48 @@ Note that this repo is a functional desktop software with minimal standalone hig
 
 Requirements:
 
-* Nvidia GPU in RTX 30XX, 40XX, 50XX series that supports fp16 and bf16. The GTX 10XX/20XX are not tested.
+* Huawei Ascend NPU supported by TorchNPU, or an Nvidia GPU in RTX 30XX, 40XX, 50XX series that supports fp16 and bf16. The GTX 10XX/20XX are not tested.
 * Linux or Windows operating system.
-* At least 6GB GPU memory.
+* At least 6GB accelerator memory.
 
-To generate 1-minute video (60 seconds) at 30fps (1800 frames) using 13B model, the minimal required GPU memory is 6GB. (Yes 6 GB, not a typo. Laptop GPUs are okay.)
+To generate 1-minute video (60 seconds) at 30fps (1800 frames) using the 13B model, the original CUDA implementation requires at least 6GB GPU memory. Ascend memory requirements depend on the NPU model and TorchNPU/CANN versions.
 
 About speed, on my RTX 4090 desktop it generates at a speed of 2.5 seconds/frame (unoptimized) or 1.5 seconds/frame (teacache). On my laptops like 3070ti laptop or 3060 laptop, it is about 4x to 8x slower. [Troubleshoot if your speed is much slower than this.](https://github.com/lllyasviel/FramePack/issues/151#issuecomment-2817054649)
 
 In any case, you will directly see the generated frames since it is next-frame(-section) prediction. So you will get lots of visual feedback before the entire video is generated.
 
 # Installation
+
+## Huawei Ascend NPU
+
+Ascend execution requires Linux, a working Ascend driver/firmware installation,
+CANN, and matching `torch` / `torch-npu` versions. Always use the official
+[TorchNPU compatibility table](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md)
+for your installed CANN release. For example, CANN 8.5 with PyTorch 2.6 uses:
+
+    source /usr/local/Ascend/ascend-toolkit/set_env.sh
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install torch==2.6.0 torchvision==0.21.0
+    pip install torch-npu==2.6.0.post5
+    pip install -r requirements.txt
+
+Verify TorchNPU before downloading the FramePack models:
+
+    python -c "import torch, torch_npu; print(torch.npu.is_available(), torch.npu.get_device_name(0))"
+
+Start FramePack on the first NPU:
+
+    python demo_gradio.py --device npu:0
+
+Use `demo_gradio_f1.py --device npu:0` for the F1 model. `--device auto` is the
+default and prefers an available NPU, then CUDA. You can also set
+`FRAMEPACK_DEVICE=npu:0`. FramePack uses TorchNPU fused attention when available
+and falls back to PyTorch scaled-dot-product attention for unsupported shapes.
+
+The first run downloads more than 30GB of model data from Hugging Face.
+
+## Nvidia CUDA
 
 **Windows**:
 
@@ -67,9 +98,9 @@ We recommend having an independent Python 3.10.
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
     pip install -r requirements.txt
 
-To start the GUI, run:
+To start the GUI on CUDA, run:
 
-    python demo_gradio.py
+    python demo_gradio.py --device cuda:0
 
 Note that it supports `--share`, `--port`, `--server`, and so on.
 
