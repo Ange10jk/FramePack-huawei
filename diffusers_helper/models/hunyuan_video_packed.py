@@ -89,7 +89,7 @@ def center_down_sample_3d(x, kernel_size):
     # xp = einops.rearrange(x, 'b c (t pt) (h ph) (w pw) -> (pt ph pw) b c t h w', pt=pt, ph=ph, pw=pw)
     # xc = xp[cp]
     # return xc
-    return torch.nn.functional.avg_pool3d(x, kernel_size, stride=kernel_size)
+    return x.unfold(2, kernel_size[0], kernel_size[0]).unfold(3, kernel_size[1], kernel_size[1]).unfold(4, kernel_size[2], kernel_size[2]).mean(dim=(-1, -2, -3))
 
 
 def get_cu_seqlens(text_mask, img_len):

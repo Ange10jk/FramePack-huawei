@@ -19,6 +19,8 @@ if args.device != "auto":
     os.environ["FRAMEPACK_DEVICE"] = args.device
 
 # Import TorchNPU and select the device before importing model libraries.
+from diffusers_helper.diffusers_helper.npu_compat import install as install_npu_compat
+install_npu_compat()
 from diffusers_helper.device import accelerator
 
 import einops
@@ -63,7 +65,7 @@ vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanV
 feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
 image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
 
-transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(os.environ.get('FRAMEPACK_I2V_MODEL', 'lllyasviel/FramePackI2V_HY'), torch_dtype=torch.bfloat16).cpu()
 
 vae.eval()
 text_encoder.eval()

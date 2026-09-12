@@ -1,0 +1,30 @@
+accelerate==1.6.0
+diffusers==0.33.1
+transformers==4.46.2
+gradio==5.23.0
+sentencepiece==0.2.0
+pillow==11.1.0
+av==12.1.0
+numpy==1.26.2
+scipy==1.12.0
+requests==2.31.0
+torchsde==0.2.6
+
+einops
+opencv-contrib-python
+safetensors
+
+# Ascend 910B x8 / CANN 8.0.RC2 / Python 3.10
+# TorchNPU product version: 6.0.RC2
+torch==2.3.1
+torch-npu==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1
+
+# torch-npu runtime dependencies omitted by upstream package metadata
+decorator==5.2.1
+ml-dtypes==0.5.3
+tornado==6.5.2
+attrs==26.1.0
+absl-py==2.5.0
+cloudpickle==3.1.2
