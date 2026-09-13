@@ -53,14 +53,14 @@ In any case, you will directly see the generated frames since it is next-frame(-
 Ascend execution requires Linux, a working Ascend driver/firmware installation,
 CANN, and matching `torch` / `torch-npu` versions. Always use the official
 [TorchNPU compatibility table](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md)
-for your installed CANN release. For example, CANN 8.5 with PyTorch 2.6 uses:
+for your installed CANN release. For example, CANN 8.0.RC2 with PyTorch 2.3.1 uses:
 
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
     python3 -m venv .venv
     source .venv/bin/activate
-    pip install torch==2.6.0 torchvision==0.21.0
-    pip install torch-npu==2.6.0.post5
-    pip install -r requirements.txt
+    pip install torch==2.3.1 torchvision==0.18.1
+    pip install torch-npu==2.3.1
+    pip install -r requirements-ascend.txt
 
 Verify TorchNPU before downloading the FramePack models:
 
