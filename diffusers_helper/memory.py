@@ -132,8 +132,19 @@ def offload_model_from_device_for_memory_preservation(model, target_device, pres
     return
 
 
+def _clear_runtime_cache(model):
+    for cache_name in ("previous_modulated_input", "previous_residual"):
+        if hasattr(model, cache_name):
+            setattr(model, cache_name, None)
+
+
 def unload_complete_models(*args):
+    seen = set()
     for model in accelerator_complete_modules + list(args):
+        if model is None or id(model) in seen:
+            continue
+        seen.add(id(model))
+        _clear_runtime_cache(model)
         model.to(device=cpu)
         print(f'Unloaded {model.__class__.__name__} as complete.')
 

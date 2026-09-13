@@ -1,0 +1,98 @@
+absl-py==2.5.0
+accelerate==1.6.0
+aiofiles==23.2.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+ascendebug @ file:///usr/local/Ascend/ascend-toolkit/8.0.RC2/toolkit/tools/ascendebug-0.1.0-py3-none-any.whl#sha256=7ecb8db90b119acd3cfac0491ca7628606b284a12e592ccc345d4619bff41262
+attrs==26.1.0
+auto-tune @ file:///root/selfgz1221714796/compiler/lib64/auto_tune-0.1.0-py3-none-any.whl#sha256=b6025db4b3af3ca016237303ae4222224092d50e032c7b5d2641a2b0456fc9b0
+av==12.1.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.5.0
+cloudpickle==3.1.2
+dataflow @ file:///root/selfgz1221714796/compiler/lib64/dataflow-0.0.1-py3-none-any.whl#sha256=1b20bf17ef75621fdb1d3717b8bc726744c71af8f0d11f33c12816239a13dd22
+decorator==5.2.1
+diffusers==0.33.1
+einops==0.8.2
+exceptiongroup==1.3.1
+fastapi==0.141.1
+ffmpy==1.0.0
+filelock==3.32.6
+fsspec==2026.7.0
+gradio==5.23.0
+gradio_client==1.8.0
+groovy==0.1.2
+h11==0.16.0
+hccl @ file:///root/selfgz269994470/hccl/lib64/hccl-0.1.0-py3-none-any.whl#sha256=351a294f7d6cfdd55bdc11645f87d9996f4a38c8783d0042014a1c33f37f799c
+hccl-parser @ file:///usr/local/Ascend/ascend-toolkit/8.0.RC2/toolkit/tools/hccl_parser-0.1-py3-none-any.whl#sha256=68c4fcbbf84918e2ca859fda48715333b6546e5fbac2c2bccf899a88e6463ff4
+hf-xet==1.6.0
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==0.36.2
+idna==3.19
+importlib_metadata==9.0.1
+Jinja2==3.1.6
+llm-datadist @ file:///root/selfgz1221714796/compiler/lib64/llm_datadist-0.0.1-py3-none-any.whl#sha256=0d81dc13638199779a97fa442ccdfa23566ac40656d116ca372ef8b17265735c
+llm-engine @ file:///root/selfgz1221714796/compiler/lib64/llm_engine-0.0.1-py3-none-any.whl#sha256=d5579e9b34abfd80708af9006785a70a5ded0f8e8d17a9c17ff57c5ea3d2e05e
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+mdurl==0.1.2
+ml_dtypes==0.5.3
+mpmath==1.3.0
+msadvisor @ file:///usr/local/Ascend/ascend-toolkit/8.0.RC2/tools/msadvisor/python/msadvisor-1.0.0-cp37-abi3-linux_aarch64.whl#sha256=943e36ea969b079ee13bf4c64cd881723cda3fa1c31ff704c6a98fd4ba1e0544
+networkx==3.4.2
+numpy==1.26.2
+op-compile-tool @ file:///root/selfgz1221714796/compiler/lib64/op_compile_tool-0.1.0-py3-none-any.whl#sha256=bf38302e51c565baf7eb558edba734c8f4772be88d2369d7da4f97cd0220e798
+op-gen @ file:///usr/local/Ascend/ascend-toolkit/8.0.RC2/toolkit/tools/op_gen-0.1-py3-none-any.whl#sha256=01fcdd9db249675d688ac2b18d3d9d5a70ed228c2e50dec1b502ae6975a4bdca
+op-test-frame @ file:///usr/local/Ascend/ascend-toolkit/8.0.RC2/toolkit/tools/op_test_frame-0.1-py3-none-any.whl#sha256=495e06a2dc0e39fb3b1dedc8822f6387f556888125014cd36c4748c112b34c74
+opc-tool @ file:///root/selfgz1221714796/compiler/lib64/opc_tool-0.1.0-py3-none-any.whl#sha256=e89d6bb9d4c8a29f472c530e1a4cec1d7da072c920bae8887e7fcd6c895a586b
+opencv-contrib-python==4.11.0.86
+orjson==3.12.0
+packaging==26.3
+pandas==2.3.3
+pillow==11.1.0
+psutil==7.2.2
+pydantic==2.13.5
+pydantic_core==2.46.5
+pydub==0.25.1
+Pygments==2.21.0
+python-dateutil==2.9.0.post0
+python-multipart==0.0.32
+pytz==2026.3.post1
+PyYAML==6.0.3
+regex==2026.9.10
+requests==2.31.0
+rich==15.0.0
+ruff==0.16.7
+safehttpx==0.1.7
+safetensors==0.8.0
+schedule-search @ file:///root/selfgz1221714796/compiler/lib64/schedule_search-0.1.0-py3-none-any.whl#sha256=e4d0bae65bb32f7b0fbf75c5c6c503355a651c72b143f1a6ce06b3afe77f4a7d
+scipy==1.12.0
+semantic-version==2.10.0
+sentencepiece==0.2.0
+shellingham==1.5.4
+six==1.17.0
+starlette==0.52.1
+sympy==1.14.0
+te @ file:///root/selfgz1221714796/compiler/lib64/te-0.4.0-py3-none-any.whl#sha256=456e1fa01392c90653b03adc23fb58a2db1f208e86e60aadab555673f8aadbaf
+tokenizers==0.20.3
+tomlkit==0.13.3
+torch==2.3.1
+torch-npu==2.3.1
+torchaudio==2.3.1
+torchsde==0.2.6
+torchvision==0.18.1
+tornado==6.5.2
+tqdm==4.70.1
+trampoline==0.1.2
+transformers==4.46.2
+typer==0.27.2
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.3
+urllib3==2.7.0
+uvicorn==0.52.4
+websockets==15.0.1
+zipp==4.1.0

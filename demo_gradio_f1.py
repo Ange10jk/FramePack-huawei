@@ -7,6 +7,10 @@ os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.di
 
 import torch
 
+from diffusers_helper.diffusers_helper.npu_compat import install as install_npu_compat
+
+install_npu_compat()
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
@@ -18,7 +22,7 @@ args = parser.parse_args()
 if args.device != "auto":
     os.environ["FRAMEPACK_DEVICE"] = args.device
 
-# Import TorchNPU and select the device before importing model libraries.
+# NPU and select the device before importing model libraries.
 from diffusers_helper.device import accelerator
 
 import einops
@@ -48,7 +52,12 @@ gpu = accelerator
 print(args)
 
 free_mem_gb = get_free_memory_gb(gpu)
-high_vram = free_mem_gb > 60
+force_high_vram = os.environ.get("FRAMEPACK_HIGH_VRAM", "").strip().lower()
+if force_high_vram:
+    high_vram = force_high_vram in {"1", "true", "yes"}
+else:
+    # Ascend 910B is kept in low-memory mode unless explicitly overridden.
+    high_vram = gpu.type == "cuda" and free_mem_gb > 60
 
 print(f'Selected accelerator: {gpu}')
 print(f'Free accelerator memory: {free_mem_gb} GB')
@@ -211,7 +220,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             def callback(d):
                 preview = d['denoised']
-                preview = vae_decode_fake(preview)
+                preview = vae_decode_fake(preview.cpu())
 
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')

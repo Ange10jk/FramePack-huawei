@@ -19,6 +19,7 @@ bucket_options = {
 
 
 def find_nearest_bucket(h, w, resolution=640):
+    if resolution not in bucket_options: bucket_options[resolution] = [(max(16, round(h * resolution / 640 / 16) * 16), max(16, round(w * resolution / 640 / 16) * 16)) for h, w in bucket_options[640]]
     min_metric = float('inf')
     best_bucket = None
     for (bucket_h, bucket_w) in bucket_options[resolution]:
