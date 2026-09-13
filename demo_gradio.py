@@ -273,6 +273,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
             clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
 
+            _ensure_transformer_loaded()
             if not high_vram:
                 unload_complete_models()
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
