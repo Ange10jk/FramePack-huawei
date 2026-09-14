@@ -56,8 +56,7 @@ force_high_vram = os.environ.get("FRAMEPACK_HIGH_VRAM", "").strip().lower()
 if force_high_vram:
     high_vram = force_high_vram in {"1", "true", "yes"}
 else:
-    # Ascend 910B is kept in low-memory mode unless explicitly overridden.
-    high_vram = gpu.type == "cuda" and free_mem_gb > 60
+    high_vram = free_mem_gb > 60
 
 print(f'Selected accelerator: {gpu}')
 print(f'Free accelerator memory: {free_mem_gb} GB')
@@ -220,7 +219,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             def callback(d):
                 preview = d['denoised']
-                preview = vae_decode_fake(preview.cpu())
+                preview = vae_decode_fake(preview)
 
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')

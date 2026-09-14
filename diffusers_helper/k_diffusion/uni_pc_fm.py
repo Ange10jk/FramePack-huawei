@@ -9,6 +9,63 @@ import torch
 from tqdm.auto import trange
 
 
+def _solve_small_linear_system(matrix, rhs):
+    """Solve UniPC's fixed 2x2/3x3 systems using NPU-supported tensor ops."""
+    size = matrix.shape[0]
+
+    if size == 2:
+        a00, a01 = matrix[0].unbind()
+        a10, a11 = matrix[1].unbind()
+        b0, b1 = rhs.unbind()
+        determinant = a00 * a11 - a01 * a10
+        return torch.stack((
+            (b0 * a11 - a01 * b1) / determinant,
+            (a00 * b1 - b0 * a10) / determinant,
+        ))
+
+    if size == 3:
+        a00, a01, a02 = matrix[0].unbind()
+        a10, a11, a12 = matrix[1].unbind()
+        a20, a21, a22 = matrix[2].unbind()
+        b0, b1, b2 = rhs.unbind()
+
+        determinant = (
+            a00 * (a11 * a22 - a12 * a21)
+            - a01 * (a10 * a22 - a12 * a20)
+            + a02 * (a10 * a21 - a11 * a20)
+        )
+        determinant_0 = (
+            b0 * (a11 * a22 - a12 * a21)
+            - a01 * (b1 * a22 - a12 * b2)
+            + a02 * (b1 * a21 - a11 * b2)
+        )
+        determinant_1 = (
+            a00 * (b1 * a22 - a12 * b2)
+            - b0 * (a10 * a22 - a12 * a20)
+            + a02 * (a10 * b2 - b1 * a20)
+        )
+        determinant_2 = (
+            a00 * (a11 * b2 - b1 * a21)
+            - a01 * (a10 * b2 - b1 * a20)
+            + b0 * (a10 * a21 - a11 * a20)
+        )
+        return torch.stack((determinant_0, determinant_1, determinant_2)) / determinant
+
+    raise ValueError(f'UniPC expected a 2x2 or 3x3 system, got {tuple(matrix.shape)}')
+
+
+def _solve_linear_system(matrix, rhs):
+    if (
+        matrix.device.type == 'npu'
+        and matrix.ndim == 2
+        and rhs.ndim == 1
+        and matrix.shape[0] == matrix.shape[1]
+        and matrix.shape[0] in (2, 3)
+    ):
+        return _solve_small_linear_system(matrix, rhs)
+    return torch.linalg.solve(matrix, rhs)
+
+
 def expand_dims(v, dims):
     return v[(...,) + (None,) * (dims - 1)]
 
@@ -78,7 +135,7 @@ class FlowMatchUniPC:
             if order == 2:
                 rhos_p = torch.tensor([0.5], device=b.device)
             else:
-                rhos_p = torch.linalg.solve(R[:-1, :-1], b[:-1])
+                rhos_p = _solve_linear_system(R[:-1, :-1], b[:-1])
         else:
             D1s = None
             rhos_p = None
@@ -86,7 +143,7 @@ class FlowMatchUniPC:
         if order == 1:
             rhos_c = torch.tensor([0.5], device=b.device)
         else:
-            rhos_c = torch.linalg.solve(R, b)
+            rhos_c = _solve_linear_system(R, b)
 
         x_t_ = expand_dims(t / t_prev_0, dims) * x - expand_dims(h_phi_1, dims) * model_prev_0
 
