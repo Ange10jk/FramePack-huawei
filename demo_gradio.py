@@ -115,43 +115,6 @@ else:
     vae.to(gpu)
     transformer.to(gpu)
 
-def _release_transformer_for_decode():
-    """Drop the NPU-backed transformer without materializing a large CPU copy."""
-    global transformer
-    if transformer is None:
-        return
-    try:
-        if gpu.type == "npu":
-            torch.npu.synchronize()
-    except Exception:
-        pass
-    for cache_name in ("previous_modulated_input", "previous_residual"):
-        if hasattr(transformer, cache_name):
-            setattr(transformer, cache_name, None)
-    transformer = None
-    __import__("gc").collect()
-    try:
-        if gpu.type == "npu":
-            torch.npu.empty_cache()
-    except Exception:
-        pass
-
-
-def _ensure_transformer_loaded():
-    global transformer
-    if transformer is not None:
-        return
-    print("Reloading transformer after decode cleanup...")
-    transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(
-        os.environ.get("FRAMEPACK_I2V_MODEL", "lllyasviel/FramePackI2V_HY"),
-        torch_dtype=torch.bfloat16,
-    ).cpu()
-    transformer.eval()
-    transformer.high_quality_fp32_output_for_inference = True
-    if not high_vram:
-        DynamicSwapInstaller.install_model(transformer, device=gpu)
-
-
 stream = AsyncStream()
 
 outputs_folder = './outputs/'
@@ -161,7 +124,6 @@ os.makedirs(outputs_folder, exist_ok=True)
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
     if gpu.type == "npu": torch.npu.set_device(gpu)
-    _ensure_transformer_loaded()
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -272,12 +234,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
             clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
 
-            _ensure_transformer_loaded()
             if not high_vram:
                 unload_complete_models()
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
-            else:
-                transformer.to(device=gpu)
 
             if use_teacache:
                 transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
@@ -339,17 +298,17 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             total_generated_latent_frames += int(generated_latents.shape[2])
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
 
-            if gpu.type == "npu":
-                torch.npu.synchronize()
-            for cache_name in ("previous_modulated_input", "previous_residual"):
-                if hasattr(transformer, cache_name):
-                    setattr(transformer, cache_name, None)
-            _release_transformer_for_decode()
-            if vae_device.type != "cpu":
-                load_model_as_complete(vae, target_device=vae_device)
-            else:
-                load_model_as_complete(vae, target_device=cpu)
-                vae.float()
+            if not high_vram:
+                offload_model_from_device_for_memory_preservation(
+                    transformer,
+                    target_device=gpu,
+                    preserved_memory_gb=8,
+                )
+                if vae_device.type != "cpu":
+                    load_model_as_complete(vae, target_device=vae_device)
+                else:
+                    load_model_as_complete(vae, target_device=cpu)
+                    vae.float()
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
 
             if history_pixels is None:
@@ -361,7 +320,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
 
-            unload_complete_models()
+            if not high_vram:
+                unload_complete_models()
 
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
 

@@ -71,7 +71,6 @@ except:
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
-_npu_fusion_attention_usable = True
 
 
 def pad_for_3d_conv(x, kernel_size):
@@ -84,11 +83,8 @@ def pad_for_3d_conv(x, kernel_size):
 
 
 def center_down_sample_3d(x, kernel_size):
-    # pt, ph, pw = kernel_size
-    # cp = (pt * ph * pw) // 2
-    # xp = einops.rearrange(x, 'b c (t pt) (h ph) (w pw) -> (pt ph pw) b c t h w', pt=pt, ph=ph, pw=pw)
-    # xc = xp[cp]
-    # return xc
+    # Preserve the original avg_pool3d(kernel_size, stride=kernel_size)
+    # semantics without requiring an NPU average-pooling kernel.
     return x.unfold(2, kernel_size[0], kernel_size[0]).unfold(3, kernel_size[1], kernel_size[1]).unfold(4, kernel_size[2], kernel_size[2]).mean(dim=(-1, -2, -3))
 
 
@@ -113,29 +109,24 @@ def apply_rotary_emb_transposed(x, freqs_cis):
 
 
 def _native_attention(q, k, v):
-    global _npu_fusion_attention_usable
-
     if (
         q.device.type == "npu"
-        and _npu_fusion_attention_usable
         and torch_npu is not None
         and hasattr(torch_npu, "npu_fusion_attention")
     ):
         head_num = q.shape[2]
         scale = q.shape[-1] ** -0.5
-        try:
-            return torch_npu.npu_fusion_attention(
-                q.contiguous(),
-                k.contiguous(),
-                v.contiguous(),
-                head_num,
-                "BSND",
-                scale=scale,
-                keep_prob=1.0,
-            )[0]
-        except (RuntimeError, TypeError) as exc:
-            _npu_fusion_attention_usable = False
-            logger.warning("NPU fusion attention unavailable for this shape; falling back to SDPA: %s", exc)
+        # Propagate execution errors (including OOM). Silently switching to
+        # SDPA can hide a broken NPU kernel and substantially increase memory.
+        return torch_npu.npu_fusion_attention(
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            head_num,
+            "BSND",
+            scale=scale,
+            keep_prob=1.0,
+        )[0]
 
     return torch.nn.functional.scaled_dot_product_attention(
         q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
@@ -159,24 +150,37 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
         return _native_attention(q, k, v)
 
     if sageattn_varlen is None and flash_attn_varlen_func is None:
-        # Native SDPA has no cu_seqlens interface. Apply attention only to each
-        # sample's valid tokens and leave padded text tokens at zero.
-        batch_size, padded_length = q.shape[:2]
+        # Match packed attention segment by segment, including padding
+        # segments. Q and KV may have different sequence boundaries.
+        if cu_seqlens_q is None or cu_seqlens_kv is None:
+            raise ValueError("Both Q and KV sequence boundaries are required")
+        q_flat = q.flatten(0, 1)
+        k_flat = k.flatten(0, 1)
+        v_flat = v.flatten(0, 1)
+        q_bounds = cu_seqlens_q.detach().cpu().tolist()
+        kv_bounds = cu_seqlens_kv.detach().cpu().tolist()
+        if len(q_bounds) != len(kv_bounds) or len(q_bounds) < 2:
+            raise ValueError("Q and KV must have the same number of segments")
+        for bounds, length in ((q_bounds, q_flat.shape[0]), (kv_bounds, k_flat.shape[0])):
+            if bounds[0] != 0 or bounds[-1] != length or any(a > b for a, b in zip(bounds, bounds[1:])):
+                raise ValueError("Sequence boundaries must cover the packed tensor in order")
+        if k.shape[:2] != v.shape[:2]:
+            raise ValueError("K and V sequence lengths must match")
         outputs = []
-        for index in range(batch_size):
-            sequence_start = index * padded_length
-            sequence_end = int(cu_seqlens_q[2 * index + 1].item())
-            valid_length = sequence_end - sequence_start
-            valid_output = _native_attention(
-                q[index:index + 1, :valid_length],
-                k[index:index + 1, :valid_length],
-                v[index:index + 1, :valid_length],
-            )
-            if valid_length < padded_length:
-                padding = torch.zeros_like(q[index:index + 1, valid_length:])
-                valid_output = torch.cat([valid_output, padding], dim=1)
-            outputs.append(valid_output)
-        return torch.cat(outputs, dim=0)
+        for qs, qe, ks, ke in zip(q_bounds, q_bounds[1:], kv_bounds, kv_bounds[1:]):
+            if qs == qe:
+                continue
+            if ks == ke:
+                outputs.append(q_flat.new_zeros((qe - qs, q.shape[2], v.shape[-1])))
+            else:
+                outputs.append(_native_attention(
+                    q_flat[qs:qe].unsqueeze(0),
+                    k_flat[ks:ke].unsqueeze(0),
+                    v_flat[ks:ke].unsqueeze(0),
+                ).squeeze(0))
+        if not outputs:
+            return q.new_zeros((*q.shape[:3], v.shape[-1]))
+        return torch.cat(outputs, dim=0).unflatten(0, q.shape[:2])
 
     B, L, H, C = q.shape
 
