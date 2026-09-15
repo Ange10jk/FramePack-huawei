@@ -221,6 +221,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             def callback(d):
                 preview = d['denoised']
+                if preview.device.type == "npu" and preview.dtype == torch.float32:
+                    preview = preview.to(dtype=torch.float16)
                 preview = vae_decode_fake(preview)
 
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
