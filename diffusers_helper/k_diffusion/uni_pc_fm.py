@@ -100,8 +100,8 @@ class FlowMatchUniPC:
             rks.append(rk)
             D1s.append((model_prev_i - model_prev_0) / rk)
 
-        rks.append(1.)
-        rks = torch.tensor(rks, device=x.device)
+        rks.append(t.new_ones(()))
+        rks = torch.stack(rks)
 
         R = []
         b = []
@@ -126,14 +126,14 @@ class FlowMatchUniPC:
             h_phi_k = h_phi_k / hh - 1 / factorial_i
 
         R = torch.stack(R)
-        b = torch.tensor(b, device=x.device)
+        b = torch.stack(b)
 
         use_predictor = len(D1s) > 0
 
         if use_predictor:
             D1s = torch.stack(D1s, dim=1)
             if order == 2:
-                rhos_p = torch.tensor([0.5], device=b.device)
+                rhos_p = b.new_tensor([0.5])
             else:
                 rhos_p = _solve_linear_system(R[:-1, :-1], b[:-1])
         else:
@@ -141,7 +141,7 @@ class FlowMatchUniPC:
             rhos_p = None
 
         if order == 1:
-            rhos_c = torch.tensor([0.5], device=b.device)
+            rhos_c = b.new_tensor([0.5])
         else:
             rhos_c = _solve_linear_system(R, b)
 

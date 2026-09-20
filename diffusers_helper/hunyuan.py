@@ -1,5 +1,9 @@
 import torch
 
+from diffusers_helper.diffusers_helper.npu_compat import install as install_npu_compat
+
+install_npu_compat()
+
 from diffusers.pipelines.hunyuan_video.pipeline_hunyuan_video import DEFAULT_PROMPT_TEMPLATE
 from diffusers_helper.utils import crop_or_pad_yield_mask
 
@@ -60,6 +64,10 @@ def encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokeniz
 
 @torch.no_grad()
 def vae_decode_fake(latents):
+    # The Ascend FP32 Conv3D workaround must also cover direct library callers.
+    if latents.device.type == "npu" and latents.dtype == torch.float32:
+        latents = latents.to(dtype=torch.float16)
+
     latent_rgb_factors = [
         [-0.0395, -0.0331, 0.0445],
         [0.0696, 0.0795, 0.0518],

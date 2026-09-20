@@ -5,7 +5,7 @@ import math
 
 import torch
 
-from diffusers_helper.device import accelerator, accelerator_api, empty_cache
+from diffusers_helper.device import accelerator, empty_cache
 
 
 cpu = torch.device('cpu')
@@ -35,7 +35,8 @@ class DynamicSwapInstaller:
             if '_buffers' in self.__dict__:
                 _buffers = self.__dict__['_buffers']
                 if name in _buffers:
-                    return _buffers[name].to(**kwargs)
+                    buffer = _buffers[name]
+                    return None if buffer is None else buffer.to(**kwargs)
             return super(original_class, self).__getattr__(name)
 
         module.__class__ = type('DynamicSwap_' + original_class.__name__, (original_class,), {
@@ -78,9 +79,12 @@ def get_free_memory_gb(device=None):
     """Return allocator-reusable plus currently free accelerator memory."""
     if device is None:
         device = accelerator
+    device = torch.device(device)
 
-    if device.type == 'cpu' or accelerator_api is None:
+    if device.type == 'cpu':
         return math.inf
+
+    accelerator_api = getattr(torch, device.type)
 
     memory_stats = accelerator_api.memory_stats(device)
     bytes_active = memory_stats.get('active_bytes.all.current', 0)
@@ -105,14 +109,14 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
 
     for module in model.modules():
         if get_free_memory_gb(target_device) <= preserved_memory_gb:
-            empty_cache()
+            empty_cache(target_device)
             return
 
         if hasattr(module, 'weight'):
             module.to(device=target_device)
 
     model.to(device=target_device)
-    empty_cache()
+    empty_cache(target_device)
     return
 
 
@@ -121,14 +125,14 @@ def offload_model_from_device_for_memory_preservation(model, target_device, pres
 
     for module in model.modules():
         if get_free_memory_gb(target_device) >= preserved_memory_gb:
-            empty_cache()
+            empty_cache(target_device)
             return
 
         if hasattr(module, 'weight'):
             module.to(device=cpu)
 
     model.to(device=cpu)
-    empty_cache()
+    empty_cache(target_device)
     return
 
 

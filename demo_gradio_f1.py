@@ -7,10 +7,6 @@ os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.di
 
 import torch
 
-from diffusers_helper.diffusers_helper.npu_compat import install as install_npu_compat
-
-install_npu_compat()
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
@@ -23,7 +19,7 @@ if args.device != "auto":
     os.environ["FRAMEPACK_DEVICE"] = args.device
 
 # NPU and select the device before importing model libraries.
-from diffusers_helper.device import accelerator
+from diffusers_helper.device import accelerator, set_device
 
 import einops
 import gradio as gr
@@ -117,8 +113,6 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
-    if gpu.type == "npu": 
-        torch.npu.set_device(gpu)
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -127,6 +121,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
     try:
+        set_device(gpu)
         # Clean accelerator memory
         if not high_vram:
             unload_complete_models(
@@ -205,7 +200,6 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         for section_index in range(total_latent_sections):
             if stream.input_queue.top() == 'end':
-                stream.output_queue.push(('end', None))
                 return
 
             print(f'section_index = {section_index}, total_latent_sections = {total_latent_sections}')
@@ -221,15 +215,12 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             def callback(d):
                 preview = d['denoised']
-                if preview.device.type == "npu" and preview.dtype == torch.float32:
-                    preview = preview.to(dtype=torch.float16)
                 preview = vae_decode_fake(preview)
 
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
 
                 if stream.input_queue.top() == 'end':
-                    stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
 
                 current_step = d['i'] + 1
@@ -313,7 +304,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 text_encoder, text_encoder_2, image_encoder, vae, transformer
             )
 
-    stream.output_queue.push(('end', None))
+    finally:
+        # Always release the UI, even if device initialization or offload fails.
+        stream.output_queue.push(('end', None))
     return
 
 

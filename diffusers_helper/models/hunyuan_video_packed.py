@@ -16,7 +16,10 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers_helper.dit_common import LayerNorm
 from diffusers_helper.device import accelerator_type, torch_npu
+from diffusers_helper.diffusers_helper.npu_compat import install as install_npu_compat
 from diffusers_helper.utils import zero_module
+
+install_npu_compat()
 
 
 enabled_backends = []

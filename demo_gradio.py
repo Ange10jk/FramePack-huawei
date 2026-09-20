@@ -19,9 +19,7 @@ if args.device != "auto":
     os.environ["FRAMEPACK_DEVICE"] = args.device
 
 # Import TorchNPU and select the device before importing model libraries.
-from diffusers_helper.diffusers_helper.npu_compat import install as install_npu_compat
-install_npu_compat()
-from diffusers_helper.device import accelerator
+from diffusers_helper.device import accelerator, set_device
 
 import einops
 import gradio as gr
@@ -64,15 +62,7 @@ text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo",
 text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
 tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
 tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
-vae_device_setting = os.environ.get("FRAMEPACK_VAE_DEVICE", "npu").strip().lower()
-if vae_device_setting == "npu":
-    vae_device = gpu
-elif vae_device_setting == "cpu":
-    vae_device = cpu
-else:
-    raise ValueError(f"Unsupported FRAMEPACK_VAE_DEVICE: {vae_device_setting}")
-vae_dtype = torch.float16 if vae_device.type != "cpu" else torch.float32
-vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=vae_dtype).cpu()
+vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
 
 feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
 image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
@@ -93,7 +83,7 @@ transformer.high_quality_fp32_output_for_inference = True
 print('transformer.high_quality_fp32_output_for_inference = True')
 
 transformer.to(dtype=torch.bfloat16)
-vae.to(dtype=vae_dtype)
+vae.to(dtype=torch.float16)
 image_encoder.to(dtype=torch.float16)
 text_encoder.to(dtype=torch.float16)
 text_encoder_2.to(dtype=torch.float16)
@@ -123,7 +113,6 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
-    if gpu.type == "npu": torch.npu.set_device(gpu)
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -132,6 +121,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
     try:
+        set_device(gpu)
         # Clean accelerator memory
         if not high_vram:
             unload_complete_models(
@@ -221,7 +211,6 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             latent_padding_size = latent_padding * latent_window_size
 
             if stream.input_queue.top() == 'end':
-                stream.output_queue.push(('end', None))
                 return
 
             print(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
@@ -245,15 +234,12 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             def callback(d):
                 preview = d['denoised']
-                if preview.device.type == "npu" and preview.dtype == torch.float32:
-                    preview = preview.to(dtype=torch.float16)
                 preview = vae_decode_fake(preview)
 
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
 
                 if stream.input_queue.top() == 'end':
-                    stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
 
                 current_step = d['i'] + 1
@@ -301,16 +287,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
 
             if not high_vram:
-                offload_model_from_device_for_memory_preservation(
-                    transformer,
-                    target_device=gpu,
-                    preserved_memory_gb=8,
-                )
-                if vae_device.type != "cpu":
-                    load_model_as_complete(vae, target_device=vae_device)
-                else:
-                    load_model_as_complete(vae, target_device=cpu)
-                    vae.float()
+                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
+                load_model_as_complete(vae, target_device=gpu)
+
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
 
             if history_pixels is None:
@@ -343,7 +322,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 text_encoder, text_encoder_2, image_encoder, vae, transformer
             )
 
-    stream.output_queue.push(('end', None))
+    finally:
+        # Always release the UI, even if device initialization or offload fails.
+        stream.output_queue.push(('end', None))
     return
 
 

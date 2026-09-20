@@ -51,11 +51,16 @@ def _select_accelerator():
         if not torch.npu.is_available():
             raise RuntimeError("FRAMEPACK_DEVICE requests an Ascend NPU, but no NPU is available.")
         device = torch.device(requested)
+        if device.index is None:
+            device = torch.device("npu", torch.npu.current_device())
         torch.npu.set_device(device)
     elif requested_type == "cuda":
         if not torch.cuda.is_available():
             raise RuntimeError("FRAMEPACK_DEVICE requests CUDA, but CUDA is not available.")
         device = torch.device(requested)
+        if device.index is None:
+            device = torch.device("cuda", torch.cuda.current_device())
+        torch.cuda.set_device(device)
     elif requested_type == "cpu":
         device = torch.device(requested)
     else:
@@ -69,14 +74,26 @@ accelerator_type = accelerator.type
 accelerator_api = getattr(torch, accelerator_type, None)
 
 
-def empty_cache():
-    if accelerator_api is not None and hasattr(accelerator_api, "empty_cache"):
-        accelerator_api.empty_cache()
+def set_device(device=None):
+    """Bind the accelerator in the calling thread before allocating tensors."""
+    device = accelerator if device is None else torch.device(device)
+    if device.type in ("npu", "cuda"):
+        getattr(torch, device.type).set_device(device)
 
 
-def synchronize():
-    if accelerator_api is not None and hasattr(accelerator_api, "synchronize"):
-        accelerator_api.synchronize(accelerator)
+def empty_cache(device=None):
+    device = accelerator if device is None else torch.device(device)
+    if device.type in ("npu", "cuda"):
+        api = getattr(torch, device.type)
+        # Cache operations act on the current device, which is thread-local.
+        with api.device(device):
+            api.empty_cache()
+
+
+def synchronize(device=None):
+    device = accelerator if device is None else torch.device(device)
+    if device.type in ("npu", "cuda"):
+        getattr(torch, device.type).synchronize(device)
 
 
 def is_npu():

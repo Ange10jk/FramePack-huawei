@@ -58,7 +58,10 @@ def sample_hunyuan(
     if batch_size is None:
         batch_size = int(prompt_embeds.shape[0])
 
-    latents = torch.randn((batch_size, 16, (frames + 3) // 4, height // 8, width // 8), generator=generator, device=generator.device).to(device=device, dtype=torch.float32)
+    # Keep CPU-seeded noise identical across CUDA and NPU, including when the
+    # caller uses the default global RNG instead of supplying a Generator.
+    noise_device = generator.device if generator is not None else torch.device("cpu")
+    latents = torch.randn((batch_size, 16, (frames + 3) // 4, height // 8, width // 8), generator=generator, device=noise_device, dtype=torch.float32).to(device=device)
 
     B, C, T, H, W = latents.shape
     seq_length = T * H * W // 4
