@@ -1,62 +1,55 @@
-import argparse
-import math
+from diffusers_helper.hf_login import login
+
 import os
-import traceback
-
-os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
-
-import torch
+import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
 parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
-parser.add_argument("--device", type=str, default="auto", help="auto, npu[:index], cuda[:index], or cpu")
+parser.add_argument("--device", type=str, default="auto", help="auto, npu[:index], cuda[:index]")
 args = parser.parse_args()
-
 if args.device != "auto":
     os.environ["FRAMEPACK_DEVICE"] = args.device
 
-# Import TorchNPU and select the device before importing model libraries.
-from diffusers_helper.device import accelerator, set_device
+from diffusers_helper.device import accelerator_api
 
-import einops
+os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
+
 import gradio as gr
-import numpy as np
+import torch
+import traceback
+import einops
 import safetensors.torch as sf
+import numpy as np
+import math
+
 from PIL import Image
 from diffusers import AutoencoderKLHunyuanVideo
-from transformers import CLIPTextModel, CLIPTokenizer, LlamaModel, LlamaTokenizerFast, SiglipImageProcessor, SiglipVisionModel
-
-from diffusers_helper.bucket_tools import find_nearest_bucket
-from diffusers_helper.clip_vision import hf_clip_vision_encode
-from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_progress_bar_html
-from diffusers_helper.hf_login import login
+from transformers import LlamaModel, CLIPTextModel, LlamaTokenizerFast, CLIPTokenizer
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
-from diffusers_helper.memory import cpu, get_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
+from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, state_dict_weighted_merge, state_dict_offset_merge, generate_timestamp
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
+from diffusers_helper.memory import cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
 from diffusers_helper.thread_utils import AsyncStream, async_run
-from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, state_dict_weighted_merge, state_dict_offset_merge, generate_timestamp
+from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_progress_bar_html
+from transformers import SiglipImageProcessor, SiglipVisionModel
+from diffusers_helper.clip_vision import hf_clip_vision_encode
+from diffusers_helper.bucket_tools import find_nearest_bucket
 
-gpu = accelerator
 
 # for win desktop probably use --server 127.0.0.1 --inbrowser
 # For linux server probably use --server 127.0.0.1 or do not use any cmd flags
 
 print(args)
 
-free_mem_gb = get_free_memory_gb(gpu)
-force_high_vram = os.environ.get("FRAMEPACK_HIGH_VRAM", "").strip().lower()
-if force_high_vram:
-    high_vram = force_high_vram in {"1", "true", "yes"}
-else:
-    high_vram = free_mem_gb > 60
+free_mem_gb = get_cuda_free_memory_gb(gpu)
+high_vram = free_mem_gb > 60
 
-print(f'Selected accelerator: {gpu}')
-print(f'Free accelerator memory: {free_mem_gb} GB')
-print(f'High-memory mode: {high_vram}')
+print(f'Free VRAM {free_mem_gb} GB')
+print(f'High-VRAM Mode: {high_vram}')
 
 text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
 text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
@@ -67,7 +60,7 @@ vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanV
 feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
 image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
 
-transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(os.environ.get('FRAMEPACK_I2V_MODEL', 'lllyasviel/FramePackI2V_HY'), torch_dtype=torch.bfloat16).cpu()
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
 
 vae.eval()
 text_encoder.eval()
@@ -121,8 +114,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
     try:
-        set_device(gpu)
-        # Clean accelerator memory
+        accelerator_api.set_device(gpu)
+        # Clean GPU
         if not high_vram:
             unload_complete_models(
                 text_encoder, text_encoder_2, image_encoder, vae, transformer
@@ -151,7 +144,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image processing ...'))))
 
         H, W, C = input_image.shape
-        height, width = find_nearest_bucket(H, W, resolution=int(os.environ.get("FRAMEPACK_RESOLUTION", "640")))
+        height, width = find_nearest_bucket(H, W, resolution=640)
         input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
 
         Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
@@ -211,6 +204,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             latent_padding_size = latent_padding * latent_window_size
 
             if stream.input_queue.top() == 'end':
+                stream.output_queue.push(('end', None))
                 return
 
             print(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
@@ -240,6 +234,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
 
                 if stream.input_queue.top() == 'end':
+                    stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
 
                 current_step = d['i'] + 1
@@ -322,9 +317,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 text_encoder, text_encoder_2, image_encoder, vae, transformer
             )
 
-    finally:
-        # Always release the UI, even if device initialization or offload fails.
-        stream.output_queue.push(('end', None))
+    stream.output_queue.push(('end', None))
     return
 
 
@@ -335,7 +328,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
     yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
-
 
     async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
 
@@ -397,7 +389,7 @@ with block:
                 gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01, info='Changing this value is not recommended.')
                 rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)  # Should not change
 
-                gpu_memory_preservation = gr.Slider(label="Accelerator Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger values reduce speed.")
+                gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
 
                 mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs. ")
 

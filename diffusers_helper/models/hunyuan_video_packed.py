@@ -15,34 +15,23 @@ from diffusers.models.embeddings import TimestepEmbedding, Timesteps, PixArtAlph
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers_helper.dit_common import LayerNorm
-from diffusers_helper.device import accelerator_type, torch_npu
-from diffusers_helper.diffusers_helper.npu_compat import install as install_npu_compat
 from diffusers_helper.utils import zero_module
-
-install_npu_compat()
 
 
 enabled_backends = []
 
-if accelerator_type == "cuda":
-    if torch.backends.cuda.flash_sdp_enabled():
-        enabled_backends.append("flash")
-    if torch.backends.cuda.math_sdp_enabled():
-        enabled_backends.append("math")
-    if torch.backends.cuda.mem_efficient_sdp_enabled():
-        enabled_backends.append("mem_efficient")
-    if torch.backends.cuda.cudnn_sdp_enabled():
-        enabled_backends.append("cudnn")
-elif accelerator_type == "npu":
-    enabled_backends.append("npu_fusion_attention")
-else:
+if torch.backends.cuda.flash_sdp_enabled():
+    enabled_backends.append("flash")
+if torch.backends.cuda.math_sdp_enabled():
     enabled_backends.append("math")
+if torch.backends.cuda.mem_efficient_sdp_enabled():
+    enabled_backends.append("mem_efficient")
+if torch.backends.cuda.cudnn_sdp_enabled():
+    enabled_backends.append("cudnn")
 
 print("Currently enabled native sdp backends:", enabled_backends)
 
 try:
-    if accelerator_type != "cuda":
-        raise ImportError
     # raise NotImplementedError
     from xformers.ops import memory_efficient_attention as xformers_attn_func
     print('Xformers is installed!')
@@ -51,8 +40,6 @@ except:
     xformers_attn_func = None
 
 try:
-    if accelerator_type != "cuda":
-        raise ImportError
     # raise NotImplementedError
     from flash_attn import flash_attn_varlen_func, flash_attn_func
     print('Flash Attn is installed!')
@@ -62,8 +49,6 @@ except:
     flash_attn_func = None
 
 try:
-    if accelerator_type != "cuda":
-        raise ImportError
     # raise NotImplementedError
     from sageattention import sageattn_varlen, sageattn
     print('Sage Attn is installed!')
@@ -86,20 +71,29 @@ def pad_for_3d_conv(x, kernel_size):
 
 
 def center_down_sample_3d(x, kernel_size):
-    # Preserve the original avg_pool3d(kernel_size, stride=kernel_size)
-    # semantics without requiring an NPU average-pooling kernel.
-    return x.unfold(2, kernel_size[0], kernel_size[0]).unfold(3, kernel_size[1], kernel_size[1]).unfold(4, kernel_size[2], kernel_size[2]).mean(dim=(-1, -2, -3))
+    # pt, ph, pw = kernel_size
+    # cp = (pt * ph * pw) // 2
+    # xp = einops.rearrange(x, 'b c (t pt) (h ph) (w pw) -> (pt ph pw) b c t h w', pt=pt, ph=ph, pw=pw)
+    # xc = xp[cp]
+    # return xc
+    return torch.nn.functional.avg_pool3d(x, kernel_size, stride=kernel_size)
 
 
 def get_cu_seqlens(text_mask, img_len):
     batch_size = text_mask.shape[0]
-    text_len = text_mask.sum(dim=1, dtype=torch.int32)
+    text_len = text_mask.sum(dim=1)
     max_len = text_mask.shape[1] + img_len
-    batch_indices = torch.arange(batch_size, dtype=torch.int32, device=text_mask.device)
-    actual_ends = batch_indices * max_len + text_len + img_len
-    padded_ends = (batch_indices + 1) * max_len
-    sequence_ends = torch.stack((actual_ends, padded_ends), dim=1).flatten()
-    return torch.cat((torch.zeros(1, dtype=torch.int32, device=text_mask.device), sequence_ends))
+
+    cu_seqlens = torch.zeros([2 * batch_size + 1], dtype=torch.int32, device=text_mask.device)
+
+    for i in range(batch_size):
+        s = text_len[i] + img_len
+        s1 = i * max_len + s
+        s2 = (i + 1) * max_len
+        cu_seqlens[2 * i + 1] = s1
+        cu_seqlens[2 * i + 2] = s2
+
+    return cu_seqlens
 
 
 def apply_rotary_emb_transposed(x, freqs_cis):
@@ -109,31 +103,6 @@ def apply_rotary_emb_transposed(x, freqs_cis):
     out = x.float() * cos + x_rotated.float() * sin
     out = out.to(x)
     return out
-
-
-def _native_attention(q, k, v):
-    if (
-        q.device.type == "npu"
-        and torch_npu is not None
-        and hasattr(torch_npu, "npu_fusion_attention")
-    ):
-        head_num = q.shape[2]
-        scale = q.shape[-1] ** -0.5
-        # Propagate execution errors (including OOM). Silently switching to
-        # SDPA can hide a broken NPU kernel and substantially increase memory.
-        return torch_npu.npu_fusion_attention(
-            q.contiguous(),
-            k.contiguous(),
-            v.contiguous(),
-            head_num,
-            "BSND",
-            scale=scale,
-            keep_prob=1.0,
-        )[0]
-
-    return torch.nn.functional.scaled_dot_product_attention(
-        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-    ).transpose(1, 2)
 
 
 def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
@@ -150,40 +119,8 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
             x = xformers_attn_func(q, k, v)
             return x
 
-        return _native_attention(q, k, v)
-
-    if sageattn_varlen is None and flash_attn_varlen_func is None:
-        # Match packed attention segment by segment, including padding
-        # segments. Q and KV may have different sequence boundaries.
-        if cu_seqlens_q is None or cu_seqlens_kv is None:
-            raise ValueError("Both Q and KV sequence boundaries are required")
-        q_flat = q.flatten(0, 1)
-        k_flat = k.flatten(0, 1)
-        v_flat = v.flatten(0, 1)
-        q_bounds = cu_seqlens_q.detach().cpu().tolist()
-        kv_bounds = cu_seqlens_kv.detach().cpu().tolist()
-        if len(q_bounds) != len(kv_bounds) or len(q_bounds) < 2:
-            raise ValueError("Q and KV must have the same number of segments")
-        for bounds, length in ((q_bounds, q_flat.shape[0]), (kv_bounds, k_flat.shape[0])):
-            if bounds[0] != 0 or bounds[-1] != length or any(a > b for a, b in zip(bounds, bounds[1:])):
-                raise ValueError("Sequence boundaries must cover the packed tensor in order")
-        if k.shape[:2] != v.shape[:2]:
-            raise ValueError("K and V sequence lengths must match")
-        outputs = []
-        for qs, qe, ks, ke in zip(q_bounds, q_bounds[1:], kv_bounds, kv_bounds[1:]):
-            if qs == qe:
-                continue
-            if ks == ke:
-                outputs.append(q_flat.new_zeros((qe - qs, q.shape[2], v.shape[-1])))
-            else:
-                outputs.append(_native_attention(
-                    q_flat[qs:qe].unsqueeze(0),
-                    k_flat[ks:ke].unsqueeze(0),
-                    v_flat[ks:ke].unsqueeze(0),
-                ).squeeze(0))
-        if not outputs:
-            return q.new_zeros((*q.shape[:3], v.shape[-1]))
-        return torch.cat(outputs, dim=0).unflatten(0, q.shape[:2])
+        x = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
+        return x
 
     B, L, H, C = q.shape
 

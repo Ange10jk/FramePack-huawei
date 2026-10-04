@@ -318,16 +318,13 @@ def add_tensors_with_padding(tensor1, tensor2):
 
 
 def print_free_mem():
-    from diffusers_helper.device import accelerator, accelerator_api, empty_cache
-
-    empty_cache()
-    if accelerator.type == 'cpu' or not hasattr(accelerator_api, 'mem_get_info'):
-        print(f"Memory information is unavailable for {accelerator}.")
-        return
-
-    free_mem, total_mem = accelerator_api.mem_get_info(accelerator)
-    print(f"Free memory: {free_mem / (1024 ** 2):.2f} MB")
-    print(f"Total memory: {total_mem / (1024 ** 2):.2f} MB")
+    from diffusers_helper.device import gpu, accelerator_api
+    accelerator_api.empty_cache()
+    free_mem, total_mem = accelerator_api.mem_get_info(gpu)
+    free_mem_mb = free_mem / (1024 ** 2)
+    total_mem_mb = total_mem / (1024 ** 2)
+    print(f"Free memory: {free_mem_mb:.2f} MB")
+    print(f"Total memory: {total_mem_mb:.2f} MB")
     return
 
 
