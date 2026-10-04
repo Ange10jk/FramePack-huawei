@@ -3,9 +3,10 @@
 
 import torch
 
+from diffusers_helper.device import gpu, accelerator_api
+
 
 cpu = torch.device('cpu')
-gpu = torch.device(f'cuda:{torch.cuda.current_device()}')
 gpu_complete_modules = []
 
 
@@ -72,10 +73,10 @@ def get_cuda_free_memory_gb(device=None):
     if device is None:
         device = gpu
 
-    memory_stats = torch.cuda.memory_stats(device)
+    memory_stats = accelerator_api.memory_stats(device)
     bytes_active = memory_stats['active_bytes.all.current']
     bytes_reserved = memory_stats['reserved_bytes.all.current']
-    bytes_free_cuda, _ = torch.cuda.mem_get_info(device)
+    bytes_free_cuda, _ = accelerator_api.mem_get_info(device)
     bytes_inactive_reserved = bytes_reserved - bytes_active
     bytes_total_available = bytes_free_cuda + bytes_inactive_reserved
     return bytes_total_available / (1024 ** 3)
@@ -86,14 +87,14 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
 
     for m in model.modules():
         if get_cuda_free_memory_gb(target_device) <= preserved_memory_gb:
-            torch.cuda.empty_cache()
+            accelerator_api.empty_cache()
             return
 
         if hasattr(m, 'weight'):
             m.to(device=target_device)
 
     model.to(device=target_device)
-    torch.cuda.empty_cache()
+    accelerator_api.empty_cache()
     return
 
 
@@ -102,14 +103,14 @@ def offload_model_from_device_for_memory_preservation(model, target_device, pres
 
     for m in model.modules():
         if get_cuda_free_memory_gb(target_device) >= preserved_memory_gb:
-            torch.cuda.empty_cache()
+            accelerator_api.empty_cache()
             return
 
         if hasattr(m, 'weight'):
             m.to(device=cpu)
 
     model.to(device=cpu)
-    torch.cuda.empty_cache()
+    accelerator_api.empty_cache()
     return
 
 
@@ -119,7 +120,7 @@ def unload_complete_models(*args):
         print(f'Unloaded {m.__class__.__name__} as complete.')
 
     gpu_complete_modules.clear()
-    torch.cuda.empty_cache()
+    accelerator_api.empty_cache()
     return
 
 

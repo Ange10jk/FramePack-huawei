@@ -1,6 +1,19 @@
 from diffusers_helper.hf_login import login
 
 import os
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--share', action='store_true')
+parser.add_argument("--server", type=str, default='0.0.0.0')
+parser.add_argument("--port", type=int, required=False)
+parser.add_argument("--inbrowser", action='store_true')
+parser.add_argument("--device", type=str, default="auto", help="auto, npu[:index], cuda[:index]")
+args = parser.parse_args()
+if args.device != "auto":
+    os.environ["FRAMEPACK_DEVICE"] = args.device
+
+from diffusers_helper.device import accelerator_api
 
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 
@@ -10,7 +23,6 @@ import traceback
 import einops
 import safetensors.torch as sf
 import numpy as np
-import argparse
 import math
 
 from PIL import Image
@@ -27,13 +39,6 @@ from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--share', action='store_true')
-parser.add_argument("--server", type=str, default='0.0.0.0')
-parser.add_argument("--port", type=int, required=False)
-parser.add_argument("--inbrowser", action='store_true')
-args = parser.parse_args()
 
 # for win desktop probably use --server 127.0.0.1 --inbrowser
 # For linux server probably use --server 127.0.0.1 or do not use any cmd flags
@@ -109,6 +114,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
     try:
+        accelerator_api.set_device(gpu)
         # Clean GPU
         if not high_vram:
             unload_complete_models(
