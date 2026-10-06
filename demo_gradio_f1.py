@@ -46,7 +46,11 @@ from diffusers_helper.bucket_tools import find_nearest_bucket
 print(args)
 
 free_mem_gb = get_cuda_free_memory_gb(gpu)
-high_vram = free_mem_gb > 60
+force_high_vram = os.environ.get("FRAMEPACK_HIGH_VRAM", "").strip().lower()
+if force_high_vram:
+    high_vram = force_high_vram in {"1", "true", "yes"}
+else:
+    high_vram = free_mem_gb > 60
 
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
