@@ -2,7 +2,10 @@
     <img src="https://github.com/user-attachments/assets/2cc030b4-87e1-40a0-b5bf-1b7d6b62820b" width="300">
 </p>
 
-# FramePack
+# FramePack-huawei
+
+This fork adapts FramePack to Huawei Ascend while retaining CUDA support.
+It is based on upstream commit `97fe5dbe06ac1f337ece08935b1076a35eefeeb9`.
 
 Official implementation and desktop software for ["Frame Context Packing and Drift Prevention in Next-Frame-Prediction Video Diffusion Models"](https://lllyasviel.github.io/frame_pack_gitpage/).
 
@@ -51,16 +54,24 @@ In any case, you will directly see the generated frames since it is next-frame(-
 ## Huawei Ascend NPU
 
 Ascend execution requires Linux, a working Ascend driver/firmware installation,
-CANN, and matching `torch` / `torch-npu` versions. Always use the official
+CANN, Python 3.10, and matching `torch` / `torch-npu` versions. Always use the official
 [TorchNPU compatibility table](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md)
-for your installed CANN release. For example, CANN 8.0.RC2 with PyTorch 2.3.1 uses:
+for your installed CANN release. `requirements-ascend.txt` records the older
+CANN 8.0.RC2 / torch 2.3.1 / torch-npu 2.3.1 environment; it is not a description
+of an upgraded server. For that historical environment only:
 
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
-    python3 -m venv .venv
+    python3.10 -m venv .venv
     source .venv/bin/activate
     pip install torch==2.3.1 torchvision==0.18.1
     pip install torch-npu==2.3.1
     pip install -r requirements-ascend.txt
+
+For a newer CANN environment, install the matching torch, torch-npu,
+torchvision and torchaudio builds first, then install application dependencies
+with `pip install -r requirements.txt`. Do not subsequently install the old
+`requirements-ascend.txt` pins over the newer framework. Verify dependencies
+with `python -m pip check`.
 
 Verify TorchNPU before downloading the FramePack models:
 
@@ -72,8 +83,31 @@ Start FramePack on the first NPU:
 
 Use `demo_gradio_f1.py --device npu:0` for the F1 model. `--device auto` is the
 default and prefers an available NPU, then CUDA. You can also set
-`FRAMEPACK_DEVICE=npu:0`. FramePack uses TorchNPU fused attention when available
-and falls back to PyTorch scaled-dot-product attention for unsupported shapes.
+`FRAMEPACK_DEVICE=npu:0`.
+
+### Scope of the Ascend adaptation
+
+* Device selection, worker-thread device binding, memory queries and cache
+  clearing use the selected NPU/CUDA backend.
+* Attention retains the upstream backend selection, including PyTorch SDPA
+  when the optional attention packages are absent. There is no explicit
+  `torch_npu.npu_fusion_attention` integration in this fork; the actual SDPA
+  kernel depends on the installed runtime and must be established by profiling.
+* On NPU only, UniPC's nonsingular 2x2/3x3 coefficient systems use explicit
+  tensor arithmetic on the same device instead of `torch.linalg.solve`, avoiding
+  that operator's CPU fallback. CPU/CUDA retain the native solver. This is a
+  local sampler change, not a global PyTorch monkey patch, and does not promise
+  an end-to-end speedup or remove other possible CPU synchronization.
+  Coefficient tensors are assembled with `torch.stack`, preserving their
+  device and dtype instead of rebuilding them from lists of scalar tensors.
+* Padding, pooling, VAE decoding, Transformer lifecycle, DynamicSwap and
+  TeaCache retain the upstream implementation. No other operator patches are
+  installed. Compatibility therefore depends on the installed TorchNPU/CANN.
+* High-VRAM mode uses the upstream `free_mem_gb > 60` threshold. Passing this
+  threshold does not guarantee that VAE decoding will fit in memory.
+* Both demos save at 30 FPS by default. A 24 FPS benchmark export requires a
+  separate frame-preserving timestamp conversion. The example benchmark files
+  contain 145 or 433 frames (about 6.04 or 18.04 seconds at 24 FPS).
 
 The first run downloads more than 30GB of model data from Hugging Face.
 
