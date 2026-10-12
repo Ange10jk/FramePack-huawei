@@ -4,6 +4,8 @@
 # Attribution-ShareAlike 4.0 International Licence
 
 
+import math
+
 import torch
 
 from tqdm.auto import trange
@@ -70,6 +72,41 @@ def expand_dims(v, dims):
     return v[(...,) + (None,) * (dims - 1)]
 
 
+def _unipc_coefficients(hh, order, variant):
+    """Compute i! * phi_(i+1)(hh) * hh / B(hh) without cancellation.
+
+    For |hh| <= 1, evaluate phi with an 18th-degree Taylor polynomial.
+    Away from zero the original recurrence is well conditioned for orders 1-3.
+    Both branches use safe inputs, so torch.where needs no host synchronization.
+    """
+    small = hh.abs() <= 1
+    series_h = torch.where(small, hh, torch.zeros_like(hh))
+    recurrence_h = torch.where(small, -torch.ones_like(hh), hh)
+    recurrence_expm1 = torch.expm1(recurrence_h)
+    phi = recurrence_expm1 / recurrence_h - 1
+    coefficients = []
+    for i in range(1, order + 1):
+        factorial = math.factorial(i)
+        series = torch.full_like(hh, factorial / math.factorial(19 + i))
+        for k in range(17, -1, -1):
+            series = series * series_h + factorial / math.factorial(k + i + 1)
+        recurrent = phi * factorial / recurrence_h
+        coefficients.append(torch.where(small, series, recurrent))
+        phi = phi / recurrence_h - 1 / math.factorial(i + 1)
+
+    b = torch.stack(coefficients)
+    if variant == 'bh2':
+        # phi_1(h) = expm1(h)/h, with a finite limit of 1 at zero.
+        phi1 = torch.full_like(hh, 1 / math.factorial(19))
+        for k in range(17, -1, -1):
+            phi1 = phi1 * series_h + 1 / math.factorial(k + 1)
+        ratio = torch.where(small, phi1, recurrence_expm1 / recurrence_h)
+        b = b / ratio
+    elif variant != 'bh1':
+        raise NotImplementedError('Bad variant!')
+    return b
+
+
 class FlowMatchUniPC:
     def __init__(self, model, extra_args, variant='bh1'):
         self.model = model
@@ -104,13 +141,9 @@ class FlowMatchUniPC:
         rks = torch.stack(rks)
 
         R = []
-        b = []
 
         hh = -h[0]
         h_phi_1 = torch.expm1(hh)
-        h_phi_k = h_phi_1 / hh - 1
-
-        factorial_i = 1
 
         if self.variant == 'bh1':
             B_h = hh
@@ -121,12 +154,9 @@ class FlowMatchUniPC:
 
         for i in range(1, order + 1):
             R.append(torch.pow(rks, i - 1))
-            b.append(h_phi_k * factorial_i / B_h)
-            factorial_i *= (i + 1)
-            h_phi_k = h_phi_k / hh - 1 / factorial_i
 
         R = torch.stack(R)
-        b = torch.stack(b)
+        b = _unipc_coefficients(hh, order, self.variant)
 
         use_predictor = len(D1s) > 0
 
