@@ -1,3 +1,8 @@
+# Server application/framework snapshot, checked on 2026-10-07.
+# Linux / Ascend 910B x8 / CANN path: cann-9.1.0 / Python 3.10.21.
+# CANN, driver and firmware are installed outside this virtual environment.
+# This is not a full pip freeze; optional Ascend profiling tools are excluded.
+
 accelerate==1.6.0
 diffusers==0.33.1
 transformers==4.46.2
@@ -10,16 +15,16 @@ scipy==1.12.0
 requests==2.31.0
 torchsde==0.2.6
 
-einops
-opencv-contrib-python
-safetensors
+einops==0.8.2
+opencv-contrib-python==4.11.0.86
+safetensors==0.8.0
 
-# Ascend 910B x8 / CANN 8.0.RC2 / Python 3.10
-# TorchNPU product version: 6.0.RC2
-torch==2.3.1
-torch-npu==2.3.1
-torchvision==0.18.1
-torchaudio==2.3.1
+# Versions below are installed distribution metadata versions.
+# The current torch runtime reports 2.7.1+cpu; torch-npu supplies NPU support.
+torch==2.7.1
+torch-npu==2.7.1.post10
+torchvision==0.22.1
+torchaudio==2.7.1
 
 # torch-npu runtime dependencies omitted by upstream package metadata
 decorator==5.2.1
@@ -28,3 +33,6 @@ tornado==6.5.2
 attrs==26.1.0
 absl-py==2.5.0
 cloudpickle==3.1.2
+psutil==7.2.2
+PyYAML==6.0.3
+typing-extensions==4.16.0

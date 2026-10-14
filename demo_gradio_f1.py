@@ -2,6 +2,8 @@ from diffusers_helper.hf_login import login
 
 import os
 import argparse
+from types import MethodType
+from arcache import arcache_forward, initialize_arcache
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -109,7 +111,9 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, acceleration_mode, mp4_crf):
+    # use_teacache = acceleration_mode == "TeaCache"
+    use_arcache = acceleration_mode == "ARCache"
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -206,10 +210,18 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 unload_complete_models()
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
 
-            if use_teacache:
-                transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
+            # if use_teacache:
+            #     transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
+            # else:
+            #     transformer.initialize_teacache(enable_teacache=False)
+
+            # Each request starts at section 0; later sections retain its reference.
+            transformer.enable_teacache = False
+            if use_arcache:
+                transformer.forward = MethodType(arcache_forward, transformer)
+                initialize_arcache(transformer, segment_id=section_index, num_steps=steps)
             else:
-                transformer.initialize_teacache(enable_teacache=False)
+                transformer.forward = MethodType(HunyuanVideoTransformer3DModelPacked.forward, transformer)
 
             def callback(d):
                 preview = d['denoised']
@@ -307,7 +319,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     return
 
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, acceleration_mode, mp4_crf):
     global stream
     assert input_image is not None, 'No input image!'
 
@@ -315,7 +327,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, acceleration_mode, mp4_crf)
 
     output_filename = None
 
@@ -362,7 +374,15 @@ with block:
                 end_button = gr.Button(value="End Generation", interactive=False)
 
             with gr.Group():
-                use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
+                # use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
+                acceleration_mode = gr.Dropdown(
+                    label="Acceleration Mode",
+                    choices=["None",
+                          #  "TeaCache",
+                             "ARCache"],
+                    value="ARCache",
+                    info="Choose a diffusion acceleration method. None disables caching."
+                )
 
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)  # Not used
                 seed = gr.Number(label="Seed", value=31337, precision=0)
@@ -387,7 +407,7 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
+    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, acceleration_mode, mp4_crf]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
