@@ -2,8 +2,6 @@ from diffusers_helper.hf_login import login
 
 import os
 import argparse
-from types import MethodType
-from arcache import arcache_forward, initialize_arcache
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -32,7 +30,8 @@ from diffusers import AutoencoderKLHunyuanVideo
 from transformers import LlamaModel, CLIPTextModel, LlamaTokenizerFast, CLIPTokenizer
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
 from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, state_dict_weighted_merge, state_dict_offset_merge, generate_timestamp
-from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
+from diffusers_helper.models.hunyuan_video_packed_hgc_terc_morder import HunyuanVideoTransformer3DModelPacked
+from diffusers_helper.models.cache_functions import cache_init_terc
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from diffusers_helper.memory import cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
 from diffusers_helper.thread_utils import AsyncStream, async_run
@@ -210,18 +209,18 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 unload_complete_models()
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
 
-            # if use_teacache:
-            #     transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
-            # else:
-            #     transformer.initialize_teacache(enable_teacache=False)
+            # Shared model caches require one forward per denoising step.
+            if use_arcache and cfg != 1.0:
+                raise ValueError("ARCache requires CFG Scale = 1.0.")
 
-            # Each request starts at section 0; later sections retain its reference.
-            transformer.enable_teacache = False
-            if use_arcache:
-                transformer.forward = MethodType(arcache_forward, transformer)
-                initialize_arcache(transformer, segment_id=section_index, num_steps=steps)
-            else:
-                transformer.forward = MethodType(HunyuanVideoTransformer3DModelPacked.forward, transformer)
+            transformer.initialize_arcache(
+                enable_arcache=use_arcache,
+                num_steps=steps,
+                section_idx=section_index,
+            )
+            cache_dic, current = None, None
+            if use_arcache and section_index == 0:
+                cache_dic, current = cache_init_terc(steps)
 
             def callback(d):
                 preview = d['denoised']
@@ -251,6 +250,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             generated_latents = sample_hunyuan(
                 transformer=transformer,
                 sampler='unipc',
+                section_index=section_index,
+                cache_dic=cache_dic,
+                current=current,
                 width=width,
                 height=height,
                 frames=latent_window_size * 4 - 3,
