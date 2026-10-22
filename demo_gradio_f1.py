@@ -131,7 +131,13 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         # Text encoding
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
-
+        
+        # for 64GB VRAM 
+        if high_vram:
+            # Encoders return to CPU after use; reload for each request.
+            text_encoder.to(gpu)
+            text_encoder_2.to(gpu)
+        
         if not high_vram:
             fake_diffusers_current_device(text_encoder, gpu)  # since we only encode one text - that is one model move and one encode, offload is same time consumption since it is also one load and one encode.
             load_model_as_complete(text_encoder_2, target_device=gpu)
@@ -145,6 +151,10 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=512)
         llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, length=512)
+        
+        # for 64GB VRAM 
+        if high_vram:
+            unload_complete_models(text_encoder, text_encoder_2)
 
         # Processing input image
 
@@ -171,13 +181,19 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         # CLIP Vision
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
-
-        if not high_vram:
+        
+        # for 64GB VRAM 
+        if high_vram:
+            image_encoder.to(gpu)
+        else:
             load_model_as_complete(image_encoder, target_device=gpu)
 
         image_encoder_output = hf_clip_vision_encode(input_image_np, feature_extractor, image_encoder)
         image_encoder_last_hidden_state = image_encoder_output.last_hidden_state
 
+        if high_vram:
+            unload_complete_models(image_encoder)
+            
         # Dtype
 
         llama_vec = llama_vec.to(transformer.dtype)
