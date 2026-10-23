@@ -841,11 +841,11 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
         ]
 
         # erc
+        # Current-section anchors never carry over to another section or request.
+        self.current_section_residuals = []  # erc_order + 1
+        self.current_section_idxs = []  # erc_order + 1
         if section_idx == 0:
             self.first_section_residuals = []  # num_steps
-        else:
-            self.current_section_residuals = []  # erc_order + 1
-            self.current_section_idxs = []  # erc_order + 1
         self.erc_order = erc_order  # erc_order >= 1
         self.ksi = ksi
 
@@ -991,7 +991,7 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
                 if should_calc:
                     self.accumulated_rel_l1_distance = 0
 
-            self.previous_modulated_input = history_modulated
+            self.previous_modulated_input = history_modulated.detach().clone()
             self.cnt += 1
 
             if self.cnt == self.num_steps:
