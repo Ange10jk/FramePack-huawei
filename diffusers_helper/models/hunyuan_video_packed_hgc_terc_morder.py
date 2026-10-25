@@ -832,12 +832,16 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
         self.previous_residual = None
         #self.teacache_rescale_func = np.poly1d([7.33226126e+02, -4.01131952e+02, 6.75869174e+01, -3.14987800e+00, 9.61237896e-02])  # original 
         
-        # hgc
-        self.teacache_rescale_funcs = [
-            np.poly1d([2960.1375799942825, -1258.5895190519657, 171.56636877600442, -8.071432155746031, 0.2046375554017501]),
-            np.poly1d([2507.048390441843, -1098.190267527934, 154.38398966235013, -7.465704639177538, 0.19841338579283493]),
-            np.poly1d([2456.6393703858494, -1082.846197587118, 153.29946286146358, -7.49267545674957, 0.2014453955564131]),
-            np.poly1d([2695.539932018577, -1189.0105282114998, 168.34607726875518, -8.277905556018856, 0.2158958437603626]),
+        # hgc: CUDA
+        # self.teacache_rescale_funcs = [
+        #     np.poly1d([2960.1375799942825, -1258.5895190519657, 171.56636877600442, -8.071432155746031, 0.2046375554017501]),
+        #     np.poly1d([2507.048390441843, -1098.190267527934, 154.38398966235013, -7.465704639177538, 0.19841338579283493]),
+        #     np.poly1d([2456.6393703858494, -1082.846197587118, 153.29946286146358, -7.49267545674957, 0.2014453955564131]),
+        #     np.poly1d([2695.539932018577, -1189.0105282114998, 168.34607726875518, -8.277905556018856, 0.2158958437603626]),
+        # ]
+        # hgc: Ascend calibration: 70 fit + 20 validation samples.
+        self.arcache_rescale_funcs = [
+            np.poly1d([-114.65503349764317, 83.7791028353363, -14.998991386333143, 1.7705135506011236, 0.02552200580691538]),
         ]
 
         # erc
@@ -985,7 +989,7 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
                 self.accumulated_rel_l1_distance = 0
             else:
                 curr_rel_l1 = ((history_modulated - self.previous_modulated_input).abs().mean() / self.previous_modulated_input.abs().mean()).cpu().item()
-                self.accumulated_rel_l1_distance += self.teacache_rescale_funcs[0](curr_rel_l1)
+                self.accumulated_rel_l1_distance += self.arcache_rescale_funcs[0](curr_rel_l1)
                 should_calc = self.accumulated_rel_l1_distance >= self.rel_l1_thresh
 
                 if should_calc:
