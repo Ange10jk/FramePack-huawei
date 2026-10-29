@@ -41,6 +41,10 @@ from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 
 
+# Shared order for first-section TaylorSeer and subsequent-section ERC.
+ARCACHE_ORDER = 1
+
+
 # for win desktop probably use --server 127.0.0.1 --inbrowser
 # For linux server probably use --server 127.0.0.1 or do not use any cmd flags
 
@@ -233,10 +237,11 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 enable_arcache=use_arcache,
                 num_steps=steps,
                 section_idx=section_index,
+                erc_order=ARCACHE_ORDER,
             )
             cache_dic, current = None, None
             if use_arcache and section_index == 0:
-                cache_dic, current = cache_init_terc(steps)
+                cache_dic, current = cache_init_terc(steps, max_order=ARCACHE_ORDER)
 
             def callback(d):
                 preview = d['denoised']
